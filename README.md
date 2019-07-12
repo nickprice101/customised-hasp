@@ -13,7 +13,7 @@ The display integrates into Home Assistant via MQTT. The Alarm Control panel is 
 
 I am not a professional designer or coder and this code is designed to be "good enough" for its intended purpose. It borrows heavily from other open-source projects including HASP and the Bruh Automation multi-sensor.
 
-Home screen - on the home screen temperatures in degrees centigrade appear next to the thermometers and expected rainfall in mm inside the rain cloud:
+Home screen:
 
 ![home](./graphics/Home_240x320.png)
 ![home_pressed](./graphics/Home-press_240x320.png)
