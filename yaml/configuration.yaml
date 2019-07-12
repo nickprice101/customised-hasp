@@ -1,0 +1,23 @@
+Put these in your configuration.yaml file. Update as required.
+
+binary_sensor:
+  - platform: mqtt
+    name: Entrance Panel Lights
+    state_topic: hasp/entrance
+    value_template: "{{ value_json.lights }}"
+    payload_on: "on"
+    payload_off: "off"    
+   
+alarm_control_panel:
+  - platform: manual_mqtt
+    state_topic: home/alarm
+    command_topic: home/alarm/set
+    payload_disarm: disarmed
+    payload_arm_away: armed_away
+    name: Home Alarm
+    code: 1234
+    pending_time: 30
+    delay_time: 20
+    trigger_time: 4
+    disarmed:
+      trigger_time: 0

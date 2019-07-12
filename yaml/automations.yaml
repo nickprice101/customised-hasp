@@ -1,0 +1,31 @@
+- id: '1562661568391' //update our panel everytime a value changes. Could add start conditions as well.
+  alias: Update Entrance Switchplate
+  trigger:
+  - entity_id: group.all_lights //your group containing your monitored lights, in this case all lights
+    platform: state
+  - entity_id: alarm_control_panel.home_alarm //your alarm panel
+    platform: state
+  - entity_id: sensor.br_temperature //example buienrader temp
+    platform: state
+  - entity_id: sensor.br_precipitation_forecast_total //example buienrader rain forecast
+    platform: state
+  - entity_id: sensor.house_temperature //example internal temp - i.e. from thermostat
+    platform: state
+  condition: []
+  action:
+  - service: mqtt.publish
+    data:
+      topic: hasp/entrance/set
+      payload_template: '{"outsideTemp":"{{states.sensor.br_temperature.state|int}}","insideTemp":"{{states.sensor.house_temperature.state|int}}","rainfall":"{{states.sensor.br_precipitation_forecast_total.state|int}}","lights":"{{states.group.all_lights.state}}"}'
+- id: '1562913304690' //turns off all the lights when we change the value of our mqtt boolean sensor
+  alias: Entrance Panel Light Button Trigger
+  trigger:
+  - entity_id: binary_sensor.entrance_panel_lights
+    from: 'on'
+    platform: state
+    to: 'off'
+  condition: []
+  action:
+  - data:
+      entity_id: group.all_lights
+    service: light.turn_off
