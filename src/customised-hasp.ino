@@ -23,7 +23,7 @@ const byte nextionSuffix[] = {0xFF, 0xFF, 0xFF};    // Standard suffix for Nexti
 #define mqtt_port 1883 //mqtt port
 
 /************* MQTT TOPICS (change these topics as you wish)  **************************/
-#define panel_state_topic "hasp/entrance
+#define panel_state_topic "hasp/entrance"
 #define panel_command_topic "hasp/entrance/set"
 #define alarm_state_topic "home/alarm"
 #define alarm_command_topic "home/alarm/set"
@@ -40,14 +40,14 @@ String outsideTemp = "0";
 String rainfall = "0";
 String activePage = "home";
 int press_count = 0;
-String masterCode = "1234"; //your alarm code
+String masterCode = "1234";
 int alarmCode[] = { 0, 0, 0, 0 };
 int codeWidth = 0;
 int codeWidthWipe = 147;
 
 /**************************** FOR OTA **************************************************/
 #define SENSORNAME "hasp-entrance"
-#define OTApassword "starbuck00" // change this to whatever password you want to use when you upload OTA
+#define OTApassword "**your_ota_password**" // change this to whatever password you want to use when you upload OTA
 int OTAport = 8266;
 
 const int BUFFER_SIZE = 300;
@@ -191,13 +191,14 @@ bool processJson(char* message) {
   if (root.containsKey("rainfall")) {
     rainfall = root["rainfall"].as<String>();
   }
-  if (root.containsKey("lightsOn")) {
-        if (strcmp(root["lightsOn"], on_cmd) == 0) {
+  if (root.containsKey("lights")) {
+        if (strcmp(root["lights"], on_cmd) == 0) {
       lightsOn = true;
     }
-    else if (strcmp(root["lightsOn"], off_cmd) == 0) {
+    else if (strcmp(root["lights"], off_cmd) == 0) {
       lightsOn = false;
     }
+    sendState(); //update status of our boolean_sensor in HA.
   }
 
   if (activePage == "home") {
@@ -217,6 +218,7 @@ void sendState() {
   JsonObject& root = jsonBuffer.createObject();
 
   root["state"] = (stateOn) ? on_cmd : off_cmd;
+  root["lights"] = (lightsOn) ? on_cmd : off_cmd;
   
   char buffer[root.measureLength() + 1];
   root.printTo(buffer, sizeof(buffer));
@@ -339,6 +341,7 @@ void nextionProcessInput()
     {
       debugPrintln(String(F("HMI IN: [Button PRESS] 'p[")) + nextionPage + "].b[" + nextionButtonID + "]'");
       if (nextionPage == "0") { //Home page
+        activePage = "home"; //reset status based on actual screen value in case there's been an issue.
         if (nextionButtonID == "1") { // ARM/DISARM ALARM BUTTON
           if (alarmStatus == "disarmed") {
             // if unarmed then set to arming
@@ -351,12 +354,18 @@ void nextionProcessInput()
           }
         }
 
+        if (nextionButtonID == "6") { //lights button, only active if lights are on
+          lightsOn = false;
+          sendState();
+        }
+
         if (nextionButtonID == "5") { //moving forward a page
           updateAlarm();
         }
       }
 
       if (nextionPage == "1") { //Alarm page
+        activePage = "alarm"; //reset status based on actual screen value in case there's been an issue.
         if (nextionButtonID.toInt() <= 10) {
           if (press_count >= 4) { //complete reset to avoid partial codes being stored
             alarmCode[0] = 0;
@@ -433,6 +442,16 @@ void updateHome() {
       alarmStatus = "disarmed";
       sendState();
     }
+  }
+
+  if (lightsOn) {
+    nextionSendCmd("b1.picc=3");
+    nextionSendCmd("b1.picc2=1");
+    nextionSendCmd("tsw b1,1"); //enable touch while it's in this mode
+  } else {
+    nextionSendCmd("b1.picc=0");
+    nextionSendCmd("b1.picc2=0"); //not needed but for clarity
+    nextionSendCmd("tsw b1,0"); //disable touch while it's in this mode
   }
 }
 
