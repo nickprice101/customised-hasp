@@ -23,3 +23,5 @@ Alarm screen:
 
 ![alarm](./graphics/Alarm_240x320.png)
 ![alarm_pressed](./graphics/Alarm-press_240x320.png)
+
+To do: add swipe controls.
