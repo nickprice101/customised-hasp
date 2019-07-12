@@ -17,6 +17,7 @@ Home screen - on the home screen temperatures in degrees centigrade appear next 
 
 ![home](./graphics/Home_240x320.png)
 ![home_pressed](./graphics/Home-press_240x320.png)
+![home_real_world](./graphics/real_world.jpeg)
 
 
 Alarm screen:
