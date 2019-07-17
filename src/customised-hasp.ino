@@ -22,11 +22,18 @@ const byte nextionSuffix[] = {0xFF, 0xFF, 0xFF};    // Standard suffix for Nexti
 #define mqtt_password "**mqtt_password**"
 #define mqtt_port 1883 //mqtt port
 
+/**************************** FOR OTA **************************************************/
+#define SENSORNAME "hasp-entrance"
+#define OTApassword "**your_ota_password**" // change this to whatever password you want to use when you upload OTA
+int OTAport = 8266;
+
 /************* MQTT TOPICS (change these topics as you wish)  **************************/
 #define panel_state_topic "hasp/entrance"
 #define panel_command_topic "hasp/entrance/set"
 #define alarm_state_topic "home/alarm"
 #define alarm_command_topic "home/alarm/set"
+
+#define BUZZERPIN    D6
 
 const char* on_cmd = "on";
 const char* off_cmd = "off";
@@ -44,14 +51,15 @@ String masterCode = "1234";
 int alarmCode[] = { 0, 0, 0, 0 };
 int codeWidth = 0;
 int codeWidthWipe = 147;
-
-/**************************** FOR OTA **************************************************/
-#define SENSORNAME "hasp-entrance"
-#define OTApassword "**your_ota_password**" // change this to whatever password you want to use when you upload OTA
-int OTAport = 8266;
+unsigned long pendingElapsed = 0;
+unsigned long transitionTimer = 0;
+bool longPress = false; //if we have held the button down in the correct area of the screen
+unsigned long pressTimer = 0;
+unsigned long dimScreenDuration = 60; //duration before we dim the screen in seconds
+String dimmedValue = "10"; //dim level from 0 - 100
+bool dimmed = false; //records whether we have already dimmed the screen
 
 const int BUFFER_SIZE = 300;
-
 #define MQTT_MAX_PACKET_SIZE 512
 
 WiFiClient espClient;
@@ -77,6 +85,8 @@ void setup() {
     debugPrintln(F("HMI: LCD not responding, continuing program load"));
   }
   nextionSendCmd("page " + activePage); //boot to the home page
+  nextionSendCmd("sendxy=1"); //enable touch tracking
+  pressTimer = millis() + dimScreenDuration; //start the last press timer based on user-defined time-out
 
   ArduinoOTA.setPort(OTAport);
   ArduinoOTA.setHostname(SENSORNAME);
@@ -117,6 +127,8 @@ void setup() {
 /********************************** START SETUP WIFI*****************************************/
 void setup_wifi() {
 
+  pinMode(BUZZERPIN, OUTPUT);
+
   delay(10);
   debugPrintln("Connecting to " + String(wifi_ssid));
 
@@ -148,6 +160,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
     debugPrintln("Alarm status updating...");
     alarmStatus_old = alarmStatus;
     alarmStatus = message;
+    if (alarmStatus == "pending") {
+      pendingElapsed = millis();
+    }
     if (activePage == "home") {
       updateHome();
     }
@@ -245,9 +260,25 @@ void loop() {
   }
   client.loop();
 
+  if (alarmStatus == "pending") {
+    //make beep, shouldn't be inputs to process.
+    if ((millis() - pendingElapsed) > 1000) { //one second delay that allows other stuff to happen
+      tone(BUZZERPIN, 1175, 250);
+      delay(100);
+      noTone(BUZZERPIN);
+      pendingElapsed = millis();
+    }    
+  }
+
   if (nextionHandleInput())
   { // Process user input from HMI
     nextionProcessInput();
+  }
+
+  //check to see if we should dim the screen
+  if ((pressTimer < millis()) && (!dimmed)) {
+    nextionSendCmd("dim=" + dimmedValue);
+    dimmed = true;
   }
 }
 
@@ -326,7 +357,51 @@ void nextionProcessInput()
 { // Process incoming serial commands from the Nextion panel
   // Command reference: https://www.itead.cc/wiki/Nextion_Instruction_Set#Format_of_Device_Return_Data
   // tl;dr, command byte, command data, 0xFF 0xFF 0xFF
-  if (nextionReturnBuffer[0] == 0x65)
+  if (nextionReturnBuffer[0] == 0x67) { //Handle incoming touch coordinate command
+    int nextionX_H = int(nextionReturnBuffer[1]);
+    int nextionX_L = int(nextionReturnBuffer[2]);
+    int nextionY_H = int(nextionReturnBuffer[3]);
+    int nextionY_L = int(nextionReturnBuffer[4]);
+    byte nextionButtonAction = nextionReturnBuffer[5];
+
+    nextionSendCmd("dim=100"); //button has been pressed to light up the display to max.
+    dimmed = false; //reset boolean
+    pressTimer = millis() + (dimScreenDuration * 1000); //reset the last press timer and set a new one based on user-defined time-out
+    
+    //emulation of swipe based on duration of press and start point, combined with button area on each page it should be intuitive
+    if (nextionButtonAction == 0x01) { //press event
+      longPress = false; //reset our boolean to allow for normal presses to recommence
+      debugPrintln("X_H=" + String(nextionX_H) + ", X_L=" + String(nextionX_L) +",Y_H=" + String(nextionY_H) +",Y_L=" + String(nextionY_L) + ".");
+      
+      if (((nextionX_H + nextionX_L) > 160) && (activePage == "home")) { // if press is in left one-third of home screen then set timer
+        transitionTimer = millis() + 500; //add 500 milliseconds as our threshold
+      } else if (((nextionX_H + nextionX_L) < 80) && (activePage == "alarm")) { // if press is in right one-third of alarm screen then set timer
+        transitionTimer = millis() + 500; //add 500 milliseconds as our threshold
+      } else {
+        transitionTimer = 0;
+      }
+      
+    }
+    if (nextionButtonAction == 0x00) { //release event, must be before the button press code so we can ignore a button press if required
+      debugPrintln("X_H=" + String(nextionX_H) + ", X_L=" + String(nextionX_L) +",Y_H=" + String(nextionY_H) +",Y_L=" + String(nextionY_L) + ".");
+      if ((transitionTimer > 0) && (transitionTimer < millis())) {
+        debugPrintln("Transition command detected.");
+        longPress = true;
+        //just make a clicking sound
+        digitalWrite(BUZZERPIN, HIGH);
+        delay(150);
+        digitalWrite(BUZZERPIN, LOW);
+        if (activePage == "home") {
+          updateAlarm(); 
+        } else {
+          updateHome();
+        }
+      }
+    }
+  }
+
+  
+  if ((nextionReturnBuffer[0] == 0x65) && (!longPress))
   { // Handle incoming touch command
     // 0x65+Page ID+Component ID+TouchEvent+End
     // Return this data when the touch event created by the user is pressed.
@@ -344,22 +419,47 @@ void nextionProcessInput()
         activePage = "home"; //reset status based on actual screen value in case there's been an issue.
         if (nextionButtonID == "1") { // ARM/DISARM ALARM BUTTON
           if (alarmStatus == "disarmed") {
+            tone(BUZZERPIN, 1568, 250);
+            delay(150);
+            noTone(BUZZERPIN);
+            //tone(BUZZERPIN, 3136, 250);
+            //delay(150);
+            //noTone(BUZZERPIN);
             // if unarmed then set to arming
             alarmStatus_old = alarmStatus;
             alarmStatus = "armed_away";
             sendState();
           } else {
+            //just make a clicking sound
+            digitalWrite(BUZZERPIN, HIGH);
+            delay(150);
+            digitalWrite(BUZZERPIN, LOW);
             // if armed then move to alarm page
             updateAlarm();
           }
         }
 
         if (nextionButtonID == "6") { //lights button, only active if lights are on
+          tone(BUZZERPIN, 1568, 250);
+          delay(150);
+          noTone(BUZZERPIN);
+          delay(150);
+          tone(BUZZERPIN, 880, 250);
+          delay(150);
+          noTone(BUZZERPIN);
+          delay(150);
+          tone(BUZZERPIN, 123, 250);
+          delay(150);
+          noTone(BUZZERPIN);
           lightsOn = false;
           sendState();
         }
 
         if (nextionButtonID == "5") { //moving forward a page
+          //just make a clicking sound
+          digitalWrite(BUZZERPIN, HIGH);
+          delay(150);
+          digitalWrite(BUZZERPIN, LOW);
           updateAlarm();
         }
       }
@@ -367,6 +467,10 @@ void nextionProcessInput()
       if (nextionPage == "1") { //Alarm page
         activePage = "alarm"; //reset status based on actual screen value in case there's been an issue.
         if (nextionButtonID.toInt() <= 10) {
+          //sound buzzer
+          tone(BUZZERPIN, int(nextionButtonID.toInt() * 375), 125);
+          delay(150);
+          noTone(BUZZERPIN);
           if (press_count >= 4) { //complete reset to avoid partial codes being stored
             alarmCode[0] = 0;
             alarmCode[1] = 0;
@@ -385,16 +489,39 @@ void nextionProcessInput()
         if (nextionButtonID == "11") { // ARM/DISARM ALARM BUTTON
           debugPrintln("Button 11 pressed, alarm value is: " + alarmStatus);
           if (alarmStatus == "disarmed") {
+            tone(BUZZERPIN, 1568, 250);
+            delay(150);
+            noTone(BUZZERPIN);
+            //tone(BUZZERPIN, 3136, 250);
+            //delay(150);
+            //noTone(BUZZERPIN);
             // if unarmed then set to arming
             alarmStatus_old = alarmStatus;
             alarmStatus = "armed_away";
             sendState();
           } else {
             if ((String(alarmCode[0]) + String(alarmCode[1]) + String(alarmCode[2]) + String(alarmCode[3])) == masterCode) {
+              tone(BUZZERPIN, 1568, 250);
+              delay(150);
+              noTone(BUZZERPIN);
+              tone(BUZZERPIN, 2637, 250);
+              delay(150);
+              noTone(BUZZERPIN);
+              tone(BUZZERPIN, 3520, 250);
+              delay(150);
+              noTone(BUZZERPIN);
               alarmStatus_old = alarmStatus;
               alarmStatus = "disarmed"; // if armed then set to not armed
               sendState();
-            } 
+              updateHome(); //move to home page
+            } else {
+              tone(BUZZERPIN, 131, 250);
+              delay(150);
+              noTone(BUZZERPIN);
+              tone(BUZZERPIN, 143, 250);
+              delay(150);
+              noTone(BUZZERPIN);
+            }
             //reset the code whether right or wrong
             alarmCode[0] = 0;
             alarmCode[1] = 0;
@@ -407,6 +534,10 @@ void nextionProcessInput()
         }
 
         if (nextionButtonID == "12") { //going back a page
+          //just make a clicking sound
+          digitalWrite(BUZZERPIN, HIGH);
+          delay(150);
+          digitalWrite(BUZZERPIN, LOW);
           updateHome();
         }
       }
